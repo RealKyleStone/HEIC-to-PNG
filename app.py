@@ -68,6 +68,54 @@ class ConverterApp(tk.Tk):
             row=0, column=1
         )
 
+        # --- Conversion settings ---
+        settings_frame = ttk.LabelFrame(self, text="Conversion Settings", padding=12)
+        settings_frame.pack(fill="x", pady=(0, 12))
+
+        # Row 0: Format + Resize
+        ttk.Label(settings_frame, text="Format:").grid(row=0, column=0, sticky="w")
+        self.format_var = tk.StringVar(value="PNG")
+        fmt_combo = ttk.Combobox(
+            settings_frame,
+            textvariable=self.format_var,
+            values=["PNG", "JPEG", "WebP"],
+            state="readonly",
+            width=8,
+        )
+        fmt_combo.grid(row=0, column=1, padx=(4, 16), sticky="w")
+        fmt_combo.bind("<<ComboboxSelected>>", self._on_format_changed)
+
+        ttk.Label(settings_frame, text="Max size:").grid(row=0, column=2, sticky="w")
+        self.resize_var = tk.StringVar(value="Original")
+        ttk.Combobox(
+            settings_frame,
+            textvariable=self.resize_var,
+            values=["Original", "4096", "2048", "1920", "1080"],
+            state="readonly",
+            width=8,
+        ).grid(row=0, column=3, padx=(4, 0), sticky="w")
+
+        # Row 1: Quality slider + metadata checkbox
+        self.quality_label = ttk.Label(settings_frame, text="Quality: 85")
+        self.quality_label.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.quality_var = tk.IntVar(value=85)
+        self.quality_scale = ttk.Scale(
+            settings_frame,
+            from_=1,
+            to=100,
+            variable=self.quality_var,
+            command=self._on_quality_changed,
+        )
+        self.quality_scale.grid(row=1, column=2, columnspan=2, sticky="ew", pady=(8, 0))
+        # Hide quality controls initially (PNG is lossless)
+        self.quality_label.grid_remove()
+        self.quality_scale.grid_remove()
+
+        self.strip_meta_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            settings_frame, text="Strip metadata (EXIF/GPS)", variable=self.strip_meta_var
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+
         # --- Progress ---
         self.progress = ttk.Progressbar(self, length=480, mode="determinate")
         self.progress.pack(fill="x", pady=(0, 4))
@@ -81,6 +129,19 @@ class ConverterApp(tk.Tk):
         x = (self.winfo_screenwidth() - w) // 2
         y = (self.winfo_screenheight() - h) // 2
         self.geometry(f"+{x}+{y}")
+
+    # ── Settings callbacks ────────────────────────────────────────────
+
+    def _on_format_changed(self, _event=None):
+        if self.format_var.get() == "PNG":
+            self.quality_label.grid_remove()
+            self.quality_scale.grid_remove()
+        else:
+            self.quality_label.grid()
+            self.quality_scale.grid()
+
+    def _on_quality_changed(self, _value=None):
+        self.quality_label.config(text=f"Quality: {self.quality_var.get()}")
 
     # ── Browse helpers ────────────────────────────────────────────────
 
@@ -105,18 +166,41 @@ class ConverterApp(tk.Tk):
     # ── Conversion logic ──────────────────────────────────────────────
 
     def _output_for(self, src_path: str) -> str:
-        """Return the destination .png path for a given source file."""
+        """Return the destination path for a given source file."""
+        ext_map = {"PNG": ".png", "JPEG": ".jpg", "WebP": ".webp"}
+        ext = ext_map[self.format_var.get()]
         src = Path(src_path)
         if self.out_path.get():
             dest_dir = Path(self.out_path.get())
         else:
             dest_dir = src.parent
-        return str(dest_dir / (src.stem + ".png"))
+        return str(dest_dir / (src.stem + ext))
 
-    @staticmethod
-    def _convert_file(src: str, dst: str) -> None:
+    def _convert_file(self, src: str, dst: str) -> None:
         img = Image.open(src)
-        img.save(dst, "PNG")
+
+        # Resize if requested
+        max_dim = self.resize_var.get()
+        if max_dim != "Original":
+            max_dim = int(max_dim)
+            img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+
+        # Strip metadata if requested
+        if self.strip_meta_var.get():
+            clean = Image.new(img.mode, img.size)
+            clean.putdata(list(img.getdata()))
+            img = clean
+
+        # Save with format-specific options
+        fmt = self.format_var.get()
+        if fmt == "PNG":
+            img.save(dst, "PNG", optimize=True, compress_level=9)
+        elif fmt == "JPEG":
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            img.save(dst, "JPEG", quality=self.quality_var.get(), optimize=True)
+        elif fmt == "WebP":
+            img.save(dst, "WebP", quality=self.quality_var.get(), method=6)
 
     # ── Single conversion ─────────────────────────────────────────────
 
